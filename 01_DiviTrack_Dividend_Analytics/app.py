@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 from datetime import date
 import time
+import os  # <--- Essential for fixing file paths
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="DiviTrack | Dividend Auditor", layout="wide")
@@ -13,11 +14,18 @@ st.set_page_config(page_title="DiviTrack | Dividend Auditor", layout="wide")
 def load_stock_map():
     """
     Reads the local 'EQUITY_L.csv' file AND adds REITs/InvITs to the search list.
+    Uses OS-agnostic paths to prevent 'File Not Found' errors on Streamlit Cloud.
     """
+    # --- ROBUST PATH LOGIC ---
+    # Get the directory where this specific app.py file lives
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    # Construct the full path to the CSV file
+    csv_path = os.path.join(current_dir, "EQUITY_L.csv")
+
     try:
-        # 1. Load standard equities from the CSV
+        # 1. Load standard equities from the CSV using the secure path
         # 'on_bad_lines' skips messy rows if the CSV is imperfect.
-        df = pd.read_csv("EQUITY_L.csv", on_bad_lines='skip')
+        df = pd.read_csv(csv_path, on_bad_lines='skip')
         
         # Standardize columns (remove extra spaces)
         df.columns = [c.strip() for c in df.columns]
@@ -42,8 +50,13 @@ def load_stock_map():
         # 4. Create the search label: "Wipro Ltd (WIPRO)"
         df['Search_Label'] = df['NAME OF COMPANY'] + " (" + df['SYMBOL'] + ")"
         return df
-    except Exception:
-        # Returns empty if file is missing or unreadable
+
+    except FileNotFoundError:
+        # Fallback: Print error to UI so you know exactly what happened
+        st.error(f"⚠ Could not find 'EQUITY_L.csv'. Code looked at: {csv_path}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"⚠ Error loading stock list: {e}")
         return pd.DataFrame()
 
 # Load the data once
@@ -93,7 +106,7 @@ with st.sidebar.form("add_stock_form"):
             
     else:
         # FALLBACK: If CSV is missing, show manual text box
-        st.error("⚠️ 'EQUITY_L.csv' not found. Please upload it to GitHub.")
+        st.error("⚠️ Stock list not loaded. Please use manual entry.")
         raw_input = st.text_input("Stock Symbol (Manual)", "ITC.NS")
         
         if raw_input:
@@ -227,7 +240,6 @@ else:
 # --- FOOTER ---
 st.markdown("---")
 st.markdown(
-    "© 2026 | Built by **[Kevin Joseph]( https://www.linkedin.com/in/kevin-joseph-in/)** | "
-    "Powered by [Yahoo Finance](https://pypi.org/project/yfinance/) & [Streamlit](https://streamlit.io)"
-)
+    "© 2026 | Built by **[Kevin Joseph](https://www.linkedin.com/in/kevin-joseph-in/)** | "
+    "Powered by [Yahoo Finance](https://pypi.org/project/yfinance/) & [Streamlit](https://streamlit.io)")
 st.caption("Disclaimer: This tool is for educational purposes and does not constitute financial advice.")
