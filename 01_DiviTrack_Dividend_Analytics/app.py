@@ -17,6 +17,10 @@ def get_financial_year(d):
     else:
         return f"FY{(d.year - 1) % 100}-{d.year % 100}"
 
+def get_quarter(d):
+    """Returns the Calendar Quarter (Q1, Q2, Q3, Q4)."""
+    return f"Q{(d.month - 1) // 3 + 1}"
+
 @st.cache_data
 def load_stock_map():
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -157,6 +161,7 @@ if len(st.session_state.portfolio) > 0:
                     # Determine Financial Year & Calendar Year
                     fy = get_financial_year(date_val)
                     cy = date_val.year
+                    quarter = get_quarter(date_val)
                     
                     all_payouts.append({
                         "Stock": name,
@@ -164,6 +169,7 @@ if len(st.session_state.portfolio) > 0:
                         "Ex-Date": date_val.date(),
                         "Financial Year": fy,
                         "Calendar Year": cy,
+                        "Quarter": quarter,
                         "Dividend/Share": amount,
                         "Qty": qty,
                         "Gross Amount": round(payout, 2)
@@ -179,70 +185,74 @@ if len(st.session_state.portfolio) > 0:
         df = pd.DataFrame(all_payouts)
         
         # A. INTELLIGENT TDS CALCULATION
-        # TDS applies if Total Dividend from ONE Company in ONE Financial Year > ₹5,000
-        
-        # Group by Stock and Financial Year
         tds_grouping = df.groupby(['Symbol', 'Financial Year'])['Gross Amount'].sum().reset_index()
         tds_grouping['TDS Deducted'] = tds_grouping['Gross Amount'].apply(lambda x: x * 0.10 if x > 5000 else 0)
         
-        # Merge TDS back to main data for visibility (Optional, but good for auditing)
-        # For the dashboard, we just need the total TDS sum
         total_tds_liability = tds_grouping['TDS Deducted'].sum()
         total_gross_dividend = df['Gross Amount'].sum()
-        
-        # Tax Liability (Slab)
         income_tax_amount = total_gross_dividend * (tax_slab / 100)
-        
-        # Final Net
-        # Note: You pay tax on the GROSS amount. TDS is just a pre-payment.
-        # Net In-Hand = Gross - TDS (Immediate) 
-        # But 'Real' Profit after Tax Filing = Gross - Tax Liability
-        
         final_post_tax_profit = total_gross_dividend - income_tax_amount
 
-        # --- 8. DASHBOARD METRICS ---
+        # --- 8. GLOBAL DASHBOARD ---
+        st.subheader("📊 Lifetime Portfolio Metrics")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Dividend", f"₹{total_gross_dividend:,.2f}")
         m2.metric("TDS Deducted", f"₹{total_tds_liability:,.2f}", help="Only if >₹5k per company/FY")
         m3.metric("Tax Liability", f"₹{income_tax_amount:,.2f}", f"{tax_slab}% Slab")
         m4.metric("Post-Tax Profit", f"₹{final_post_tax_profit:,.2f}", "Real Value")
 
-        # --- 9. YEARLY BREAKDOWNS ---
-        st.subheader("📅 Yearly Breakdown")
-        
-        tab1, tab2 = st.tabs(["🏛️ Financial Year View", "🗓️ Calendar Year View"])
-        
-        with tab1:
-            # Group by FY
-            fy_summary = df.groupby('Financial Year')['Gross Amount'].sum().reset_index()
-            fy_summary = fy_summary.sort_values('Financial Year', ascending=False)
-            st.dataframe(fy_summary, use_container_width=True, hide_index=True)
-            
-            # Chart
-            st.bar_chart(fy_summary, x="Financial Year", y="Gross Amount", color="#29B5E8")
+        st.markdown("---")
 
-        with tab2:
-            # Group by Calendar Year
-            cy_summary = df.groupby('Calendar Year')['Gross Amount'].sum().reset_index()
-            cy_summary = cy_summary.sort_values('Calendar Year', ascending=False)
-            # Convert Year to String to avoid comma formatting (e.g. 2,024)
-            cy_summary['Calendar Year'] = cy_summary['Calendar Year'].astype(str)
-            st.dataframe(cy_summary, use_container_width=True, hide_index=True)
+        # --- 9. NEW FEATURE: HISTORICAL LOOKUP ---
+        st.subheader("🔎 Historical Drill-Down")
+        st.markdown("Select a specific year to see your earnings for that period.")
+
+        col_search1, col_search2 = st.columns(2)
+        
+        with col_search1:
+            search_mode = st.radio("Group By:", ["Calendar Year (Jan-Dec)", "Financial Year (Apr-Mar)"], horizontal=True)
+        
+        with col_search2:
+            if search_mode == "Calendar Year (Jan-Dec)":
+                unique_years = sorted(df['Calendar Year'].unique(), reverse=True)
+                selected_year = st.selectbox("Select Year", unique_years)
+                # Filter Data
+                filtered_df = df[df['Calendar Year'] == selected_year]
+            else:
+                unique_fys = sorted(df['Financial Year'].unique(), reverse=True)
+                selected_year = st.selectbox("Select Financial Year", unique_fys)
+                # Filter Data
+                filtered_df = df[df['Financial Year'] == selected_year]
+
+        if not filtered_df.empty:
+            # Metrics for the Selected Year
+            year_total = filtered_df['Gross Amount'].sum()
             
-            # Chart
-            st.bar_chart(cy_summary, x="Calendar Year", y="Gross Amount", color="#00C853")
+            # TDS for this specific year (Approximate visualization)
+            # We re-run the TDS check just for the filtered view to be safe
+            year_tds_df = filtered_df.groupby(['Symbol', 'Financial Year'])['Gross Amount'].sum().reset_index()
+            year_tds_val = year_tds_df['Gross Amount'].apply(lambda x: x * 0.10 if x > 5000 else 0).sum()
+            
+            ym1, ym2, ym3 = st.columns(3)
+            ym1.metric(f"Total Dividend ({selected_year})", f"₹{year_total:,.2f}")
+            ym2.metric(f"TDS ({selected_year})", f"₹{year_tds_val:,.2f}")
+            ym3.metric("Stock Count", len(filtered_df['Symbol'].unique()))
+            
+            # Quarterly Breakdown Chart
+            st.caption(f"Quarterly Performance in {selected_year}")
+            q_summary = filtered_df.groupby('Quarter')['Gross Amount'].sum().reset_index()
+            st.bar_chart(q_summary, x="Quarter", y="Gross Amount", color="#FF4B4B")
+            
+            with st.expander(f"View Transaction Details for {selected_year}"):
+                st.dataframe(filtered_df.sort_values(by="Ex-Date", ascending=False), use_container_width=True)
+        else:
+            st.warning("No data found for this selection.")
 
         # --- 10. DETAILED LOG ---
-        st.subheader("📝 Transaction Ledger")
+        st.markdown("---")
+        st.subheader("📝 Full Transaction Ledger")
         st.dataframe(df.sort_values(by="Ex-Date", ascending=False), use_container_width=True)
         
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download Ledger (CSV)",
-            data=csv,
-            file_name='dividend_statement.csv',
-            mime='text/csv',
-        )
     else:
         st.info("No dividends found since purchase date.")
 
@@ -253,4 +263,5 @@ else:
 st.markdown("---")
 st.markdown(
     "© 2026 | Built by **[Kevin Joseph](https://www.linkedin.com/in/kevin-joseph-in/)** | "
-    "Powered by [Yahoo Finance](https://pypi.org/project/yfinance/)")
+    "Powered by [Yahoo Finance](https://pypi.org/project/yfinance/)"
+)
