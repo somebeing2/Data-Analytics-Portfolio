@@ -124,9 +124,10 @@ if st.sidebar.button("🗑️ Clear Portfolio"):
 # --- 7. MAIN DASHBOARD ---
 st.title("DiviTrack")
 
-# DISCLAIMERS
+# DISCLAIMERS (UPDATED)
 with st.expander("⚠️ Important Disclaimers & Privacy", expanded=False):
     st.markdown("""
+    * **Residency:** Taxation rules applied here are strictly for **Resident Individuals in India**.
     * **Not Financial Advice:** This tool is for estimation only.
     * **Verify Data:** Dividend data is fetched from Yahoo Finance APIs. Verify with your Form 26AS.
     * **Tax Rules:** TDS calculations are estimates (10%) and do not account for specific exemptions.
