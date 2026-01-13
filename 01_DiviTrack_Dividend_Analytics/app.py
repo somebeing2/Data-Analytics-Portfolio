@@ -21,37 +21,54 @@ def get_fiscal_quarter(d):
     if d.month >= 4: return f"Q{(d.month - 4) // 3 + 1}"
     return "Q4"
 
-# --- 3. CACHED DATA FETCHING (FIXES RATE LIMIT ERROR) ---
+# --- 3. DATA LOADING (RESTORED DROPDOWN) ---
+@st.cache_data
+def load_stock_db():
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        csv_path = os.path.join(current_dir, "EQUITY_L.csv")
+        df = pd.read_csv(csv_path, on_bad_lines='skip')
+        df.columns = [c.strip() for c in df.columns]
+        
+        # Add REITs & InvITs Manually
+        extras = [
+            {"NAME OF COMPANY": "Embassy Office Parks REIT", "SYMBOL": "EMBASSY"},
+            {"NAME OF COMPANY": "Mindspace Business Parks REIT", "SYMBOL": "MINDSPACE"},
+            {"NAME OF COMPANY": "Brookfield India Real Estate Trust", "SYMBOL": "BIRET"},
+            {"NAME OF COMPANY": "Nexus Select Trust", "SYMBOL": "NEXUS"},
+            {"NAME OF COMPANY": "India Grid Trust", "SYMBOL": "INDIAGRID"},
+            {"NAME OF COMPANY": "PowerGrid InvIT", "SYMBOL": "PGINVIT"},
+            {"NAME OF COMPANY": "IRB InvIT Fund", "SYMBOL": "IRBINVIT"}
+        ]
+        df = pd.concat([df, pd.DataFrame(extras)], ignore_index=True)
+        
+        # Create Search Label: "ITC Ltd (ITC)"
+        df['Label'] = df['NAME OF COMPANY'] + " (" + df['SYMBOL'] + ")"
+        return df
+    except:
+        return pd.DataFrame()
+
+# --- 4. CACHED DATA FETCHING ---
 @st.cache_data(ttl=3600, show_spinner=True) 
 def fetch_portfolio_data(portfolio):
-    """
-    Fetches data for the entire portfolio once and caches it.
-    This prevents hitting Yahoo Finance limits when changing views.
-    """
     all_rows = []
-    
     for p in portfolio:
         try:
-            # Add small delay to prevent rate limiting
-            time.sleep(0.2) 
-            
+            time.sleep(0.2) # Prevent Rate Limiting
             tk = yf.Ticker(p['Ticker'])
             hist = tk.dividends
-            
-            # Convert timezone if needed
             if not hist.empty:
                 hist.index = hist.index.tz_localize(None)
             
-            # Filter by Buy Date
             my_divs = hist[hist.index > pd.to_datetime(p['BuyDate'])]
             
             for d, amt in my_divs.items():
                 d_obj = d.date()
                 gross = amt * p['Qty']
                 
-                # Pre-calculate Tags
-                fy = get_fy(d_obj)      # Fiscal (FY24-25)
-                cy = str(d_obj.year)    # Calendar (2024)
+                # Tags
+                fy = get_fy(d_obj)
+                cy = str(d_obj.year)
                 
                 all_rows.append({
                     "Date": d_obj,
@@ -60,55 +77,56 @@ def fetch_portfolio_data(portfolio):
                     "Gross": gross,
                     "FY": fy,
                     "CY": cy,
-                    # We store both quarter types so we can switch instantly
                     "Q_Fiscal": get_fiscal_quarter(d_obj),
                     "Q_Cal": f"Q{(d_obj.month-1)//3+1}"
                 })
-        except Exception as e:
-            # Log error but don't crash app
-            print(f"Error fetching {p['Ticker']}: {e}")
+        except:
             pass
-            
     return all_rows
 
-# --- 4. SESSION STATE ---
+# --- 5. SESSION STATE ---
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = []
 
-# --- 5. SIDEBAR: PORTFOLIO MANAGER ---
+# --- 6. SIDEBAR ---
 st.sidebar.header("Portfolio Manager")
 
-# STOCK ADDER
-with st.sidebar.expander("➕ Add Stock", expanded=True):
+# STOCK ADDER (UPDATED)
+with st.sidebar.expander("➕ Add Asset", expanded=True):
+    stock_db = load_stock_db()
+    
     with st.form("add"):
-        ticker_in = st.text_input("Stock Symbol", "ITC.NS")
+        # DROPDOWN LOGIC
+        if not stock_db.empty:
+            sel = st.selectbox("Search Stock / REIT / InvIT", stock_db['Label'], index=None, placeholder="Type to search...")
+            # Extract Symbol: "ITC (ITC)" -> "ITC.NS"
+            ticker_val = f"{sel.split('(')[-1].replace(')', '').strip()}.NS" if sel else None
+            name_val = sel.split("(")[0].strip() if sel else None
+        else:
+            # Fallback if CSV missing
+            ticker_val = st.text_input("Symbol (e.g. ITC.NS)")
+            name_val = ticker_val
+
         qty = st.number_input("Qty", 1, 100000, 100)
         b_date = st.date_input("Buy Date", date(2023, 1, 1))
         
-        if st.form_submit_button("Add Stock"):
-            try:
-                # Quick check to get a better name if possible
-                t = yf.Ticker(ticker_in)
-                name = t.info.get('shortName', ticker_in)
-            except:
-                name = ticker_in
-            
-            st.session_state.portfolio.append({
-                "Ticker": ticker_in, "Name": name, "Qty": qty, "BuyDate": b_date
-            })
-            # Clear cache so new stock is fetched
-            st.cache_data.clear()
-            st.rerun()
+        if st.form_submit_button("Add Asset"):
+            if ticker_val:
+                st.session_state.portfolio.append({
+                    "Ticker": ticker_val, "Name": name_val, "Qty": qty, "BuyDate": b_date
+                })
+                st.cache_data.clear()
+                st.rerun()
 
 if st.sidebar.button("🗑️ Clear Portfolio"):
     st.session_state.portfolio = []
     st.cache_data.clear()
     st.rerun()
 
-# --- 6. MAIN DASHBOARD ---
+# --- 7. MAIN DASHBOARD ---
 st.title("DiviTrack Pro")
 
-# --- DISCLAIMERS ---
+# DISCLAIMERS
 with st.expander("⚠️ Important Disclaimers & Privacy", expanded=False):
     st.markdown("""
     * **Not Financial Advice:** This tool is for estimation only.
@@ -126,22 +144,17 @@ with c2:
     is_fiscal = "Financial" in view_mode
 
 if st.session_state.portfolio:
-    
-    # FETCH DATA (Cached)
     all_rows = fetch_portfolio_data(st.session_state.portfolio)
 
     if all_rows:
         df = pd.DataFrame(all_rows)
 
-        # --- TDS CALCULATION (FY BASED) ---
-        # 1. Sum by FY to find >5000 (Always use FY for tax rules)
+        # TDS CALCULATION
         fy_sums = df.groupby(['Symbol', 'FY'])['Gross'].sum()
         taxable_keys = fy_sums[fy_sums > 5000].index.tolist()
-        
-        # 2. Stamp TDS
         df['TDS'] = df.apply(lambda x: x['Gross'] * 0.10 if (x['Symbol'], x['FY']) in taxable_keys else 0, axis=1)
 
-        # --- PREPARE VIEW COLUMNS ---
+        # PREPARE VIEW
         if is_fiscal:
             df['Year_Display'] = df['FY']
             df['Q_Display'] = df['Q_Fiscal']
@@ -149,24 +162,24 @@ if st.session_state.portfolio:
             df['Year_Display'] = df['CY']
             df['Q_Display'] = df['Q_Cal']
 
-        # --- FILTERING ---
+        # FILTER
         years = sorted(df['Year_Display'].unique(), reverse=True)
         
         st.divider()
         col_f1, col_f2 = st.columns(2)
         with col_f1:
-            sel_year = st.selectbox("Select Year", years, index=0) # Auto-select most recent
+            sel_year = st.selectbox("Select Year", years, index=0)
         with col_f2:
             qs = sorted(df[df['Year_Display'] == sel_year]['Q_Display'].unique())
             qs.insert(0, "All Quarters")
             sel_q = st.selectbox("Select Quarter", qs)
 
-        # APPLY FILTER
+        # APPLY
         view_df = df[df['Year_Display'] == sel_year].copy()
         if sel_q != "All Quarters":
             view_df = view_df[view_df['Q_Display'] == sel_q]
 
-        # --- DISPLAY ---
+        # METRICS
         if not view_df.empty:
             tot = view_df['Gross'].sum()
             tds = view_df['TDS'].sum()
@@ -185,8 +198,7 @@ if st.session_state.portfolio:
     else:
         st.info("No dividends found for these dates.")
 else:
-    st.info("Add stock to begin.")
+    st.info("Add an asset to begin.")
 
-# --- FOOTER ---
 st.divider()
 st.markdown("© 2026 | Built by **[Kevin Joseph](https://www.linkedin.com/in/kevin-joseph-in/)**")
