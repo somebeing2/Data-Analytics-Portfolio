@@ -3,34 +3,29 @@ import yfinance as yf
 import pandas as pd
 from datetime import date
 import time
-import os  # <--- Essential for fixing file paths
+import os
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="DiviTrack | Dividend Auditor", layout="wide")
 
 # --- 2. HELPER FUNCTIONS ---
 
+def get_financial_year(d):
+    """Returns the Financial Year (e.g., 'FY24-25') for a given date."""
+    if d.month >= 4:
+        return f"FY{d.year % 100}-{(d.year + 1) % 100}"
+    else:
+        return f"FY{(d.year - 1) % 100}-{d.year % 100}"
+
 @st.cache_data
 def load_stock_map():
-    """
-    Reads the local 'EQUITY_L.csv' file AND adds REITs/InvITs to the search list.
-    Uses OS-agnostic paths to prevent 'File Not Found' errors on Streamlit Cloud.
-    """
-    # --- ROBUST PATH LOGIC ---
-    # Get the directory where this specific app.py file lives
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    # Construct the full path to the CSV file
     csv_path = os.path.join(current_dir, "EQUITY_L.csv")
 
     try:
-        # 1. Load standard equities from the CSV using the secure path
-        # 'on_bad_lines' skips messy rows if the CSV is imperfect.
         df = pd.read_csv(csv_path, on_bad_lines='skip')
-        
-        # Standardize columns (remove extra spaces)
         df.columns = [c.strip() for c in df.columns]
         
-        # 2. DEFINE REITS & INVITs (Manually added because they aren't in EQUITY_L.csv)
         reits_data = [
             {"NAME OF COMPANY": "Embassy Office Parks REIT", "SYMBOL": "EMBASSY"},
             {"NAME OF COMPANY": "Mindspace Business Parks REIT", "SYMBOL": "MINDSPACE"},
@@ -42,35 +37,29 @@ def load_stock_map():
             {"NAME OF COMPANY": "Shrem InvIT", "SYMBOL": "SHREMINVIT"}
         ]
         
-        # 3. Combine standard stocks with REITs
         df_reits = pd.DataFrame(reits_data)
-        # Use concat to merge them
         df = pd.concat([df, df_reits], ignore_index=True)
-        
-        # 4. Create the search label: "Wipro Ltd (WIPRO)"
         df['Search_Label'] = df['NAME OF COMPANY'] + " (" + df['SYMBOL'] + ")"
         return df
 
     except FileNotFoundError:
-        # Fallback: Print error to UI so you know exactly what happened
         st.error(f"⚠ Could not find 'EQUITY_L.csv'. Code looked at: {csv_path}")
         return pd.DataFrame()
     except Exception as e:
         st.error(f"⚠ Error loading stock list: {e}")
         return pd.DataFrame()
 
-# Load the data once
 stock_map_df = load_stock_map()
 
 # --- 3. DISCLAIMER & PRIVACY ---
 st.warning("""
     ⚠️ **IMPORTANT DISCLAIMER:**
-    * **Not Financial Advice:** This tool is for estimation only.
-    * **Verify Data:** Dividend data is fetched from Yahoo Finance APIs. Verify with your Form 26AS.
-    * **Tax Rules:** TDS calculations are estimates (10%) and do not account for specific exemptions.
+    * **Resident Individuals Only:** TDS logic assumes you are a Resident Individual (Section 194).
+    * **TDS Rule:** 10% TDS is auto-calculated ONLY if dividends from a single company exceed ₹5,000 in a Financial Year.
+    * **Not Financial Advice:** Verify all data with your Form 26AS.
 """)
 
-st.success("🔒 **Privacy Notice:** Your data is processed locally in RAM. It is never stored, saved, or shared. Refreshing this page wipes all data.")
+st.success("🔒 **Privacy Notice:** Your data is processed locally in RAM. It is never stored, saved, or shared.")
 
 # Initialize Session State
 if 'portfolio' not in st.session_state:
@@ -80,12 +69,9 @@ if 'portfolio' not in st.session_state:
 st.sidebar.header("💰 Add to Portfolio")
 
 with st.sidebar.form("add_stock_form"):
-    
-    # --- LOGIC: SEARCHABLE DROPDOWN ---
     selected_ticker_symbol = None
     selected_stock_name = None
     
-    # Check if we successfully loaded the CSV list
     if not stock_map_df.empty:
         user_selection = st.selectbox(
             "Search Stock Name", 
@@ -95,26 +81,20 @@ with st.sidebar.form("add_stock_form"):
         )
         
         if user_selection:
-            # EXTRACT SYMBOL LOGIC
             try:
-                # "The Federal Bank Ltd (FEDERALBNK)" -> "FEDERALBNK"
                 clean_symbol = user_selection.split("(")[-1].replace(")", "").strip()
                 selected_ticker_symbol = f"{clean_symbol}.NS"
                 selected_stock_name = user_selection.split("(")[0].strip()
             except:
-                st.error("Error parsing stock name. Please use manual entry.")
+                st.error("Error parsing name.")
             
     else:
-        # FALLBACK: If CSV is missing, show manual text box
-        st.error("⚠️ Stock list not loaded. Please use manual entry.")
         raw_input = st.text_input("Stock Symbol (Manual)", "ITC.NS")
-        
         if raw_input:
             clean_symbol = raw_input.upper().replace(" ", "").strip()
             selected_ticker_symbol = clean_symbol if clean_symbol.endswith(".NS") else f"{clean_symbol}.NS"
             selected_stock_name = selected_ticker_symbol
 
-    # Common Inputs
     qty_input = st.number_input("Quantity", min_value=1, max_value=100000, value=100)
     buy_date_input = st.date_input("Purchase Date", date(2023, 1, 1))
     
@@ -129,33 +109,26 @@ with st.sidebar.form("add_stock_form"):
                 "BuyDate": buy_date_input
             })
             st.success(f"Added {selected_stock_name}")
-        else:
-            st.error("Please select or enter a stock.")
 
-# Clear Button
 if st.sidebar.button("🗑️ Clear Portfolio"):
     st.session_state.portfolio = []
     st.rerun()
 
 # --- 5. MAIN LOGIC ---
 st.title("💸 DiviTrack: Dividend Tax & Eligibility Calculator")
-st.markdown("This tool scans historical data to calculate your **Real In-Hand Profit** after TDS and Tax Slabs.")
 
-# --- 6. TAX SETTINGS ---
-st.subheader("⚙️ Tax Configuration")
+# Tax Configuration
 col_tax1, col_tax2 = st.columns(2)
 with col_tax1:
     tax_slab = st.selectbox("Select Your Income Tax Slab", [0, 10, 20, 30], index=3, format_func=lambda x: f"{x}% Slab")
 with col_tax2:
-    apply_tds = st.checkbox("Apply 10% TDS?", value=True, help="TDS is deducted if dividend > ₹5,000")
+    st.info("ℹ️ TDS is now auto-calculated per company/FY.")
 
-# --- 7. PROCESSING ENGINE ---
+# --- 6. PROCESSING ENGINE ---
 if len(st.session_state.portfolio) > 0:
     st.divider()
     
-    total_gross_dividend = 0
     all_payouts = []
-
     progress_text = "Scanning secure data streams..."
     my_bar = st.progress(0, text=progress_text)
     
@@ -165,8 +138,6 @@ if len(st.session_state.portfolio) > 0:
         ticker = item['Ticker']
         name = item.get('Name', ticker) 
         qty = item['Qty']
-        
-        # Ensure buy_date is a pandas timestamp
         buy_date = pd.to_datetime(item['BuyDate'])
         
         # Rate Limiting
@@ -177,56 +148,97 @@ if len(st.session_state.portfolio) > 0:
             stock = yf.Ticker(ticker)
             div_history = stock.dividends
             
-            if div_history.empty:
-                print(f"No data for {ticker}")
-            else:
-                # --- FIX FOR TIMEZONE ERROR ---
-                # Remove timezone awareness from Yahoo data so it matches 'buy_date'
+            if not div_history.empty:
                 div_history.index = div_history.index.tz_localize(None)
-                
-                # CORE LOGIC
                 my_dividends = div_history[div_history.index > buy_date]
                 
-                if not my_dividends.empty:
-                    for date_val, amount in my_dividends.items():
-                        payout = amount * qty
-                        total_gross_dividend += payout
-                        
-                        all_payouts.append({
-                            "Stock": name,
-                            "Symbol": ticker,
-                            "Ex-Date": date_val.date(),
-                            "Dividend/Share": f"₹{amount}",
-                            "Qty": qty,
-                            "Total Payout": round(payout, 2)
-                        })
+                for date_val, amount in my_dividends.items():
+                    payout = amount * qty
+                    # Determine Financial Year & Calendar Year
+                    fy = get_financial_year(date_val)
+                    cy = date_val.year
+                    
+                    all_payouts.append({
+                        "Stock": name,
+                        "Symbol": ticker,
+                        "Ex-Date": date_val.date(),
+                        "Financial Year": fy,
+                        "Calendar Year": cy,
+                        "Dividend/Share": amount,
+                        "Qty": qty,
+                        "Gross Amount": round(payout, 2)
+                    })
             
         except Exception as e:
-            st.error(f"Could not fetch data for {name} ({ticker}). Error: {e}")
+            st.error(f"Error fetching {name}: {e}")
 
     my_bar.empty()
 
-    # --- 8. RESULTS ---
-    tds_amount = total_gross_dividend * 0.10 if apply_tds else 0
-    income_tax_amount = total_gross_dividend * (tax_slab / 100)
-    final_in_hand = total_gross_dividend - income_tax_amount
-
-    # Metrics
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Dividend", f"₹{total_gross_dividend:,.2f}")
-    m2.metric("Est. TDS (10%)", f"₹{tds_amount:,.2f}")
-    m3.metric("Tax Liability", f"₹{income_tax_amount:,.2f}", f"{tax_slab}% Slab")
-    m4.metric("Net Profit", f"₹{final_in_hand:,.2f}", delta="In Hand")
-
-    # --- 9. EXPORT DATA ---
-    st.subheader("📝 Transaction Log")
+    # --- 7. ANALYSIS & TAX LOGIC ---
     if all_payouts:
-        df_results = pd.DataFrame(all_payouts).sort_values(by="Ex-Date", ascending=False)
-        st.dataframe(df_results, use_container_width=True)
+        df = pd.DataFrame(all_payouts)
         
-        csv = df_results.to_csv(index=False).encode('utf-8')
+        # A. INTELLIGENT TDS CALCULATION
+        # TDS applies if Total Dividend from ONE Company in ONE Financial Year > ₹5,000
+        
+        # Group by Stock and Financial Year
+        tds_grouping = df.groupby(['Symbol', 'Financial Year'])['Gross Amount'].sum().reset_index()
+        tds_grouping['TDS Deducted'] = tds_grouping['Gross Amount'].apply(lambda x: x * 0.10 if x > 5000 else 0)
+        
+        # Merge TDS back to main data for visibility (Optional, but good for auditing)
+        # For the dashboard, we just need the total TDS sum
+        total_tds_liability = tds_grouping['TDS Deducted'].sum()
+        total_gross_dividend = df['Gross Amount'].sum()
+        
+        # Tax Liability (Slab)
+        income_tax_amount = total_gross_dividend * (tax_slab / 100)
+        
+        # Final Net
+        # Note: You pay tax on the GROSS amount. TDS is just a pre-payment.
+        # Net In-Hand = Gross - TDS (Immediate) 
+        # But 'Real' Profit after Tax Filing = Gross - Tax Liability
+        
+        final_post_tax_profit = total_gross_dividend - income_tax_amount
+
+        # --- 8. DASHBOARD METRICS ---
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Dividend", f"₹{total_gross_dividend:,.2f}")
+        m2.metric("TDS Deducted", f"₹{total_tds_liability:,.2f}", help="Only if >₹5k per company/FY")
+        m3.metric("Tax Liability", f"₹{income_tax_amount:,.2f}", f"{tax_slab}% Slab")
+        m4.metric("Post-Tax Profit", f"₹{final_post_tax_profit:,.2f}", "Real Value")
+
+        # --- 9. YEARLY BREAKDOWNS ---
+        st.subheader("📅 Yearly Breakdown")
+        
+        tab1, tab2 = st.tabs(["🏛️ Financial Year View", "🗓️ Calendar Year View"])
+        
+        with tab1:
+            # Group by FY
+            fy_summary = df.groupby('Financial Year')['Gross Amount'].sum().reset_index()
+            fy_summary = fy_summary.sort_values('Financial Year', ascending=False)
+            st.dataframe(fy_summary, use_container_width=True, hide_index=True)
+            
+            # Chart
+            st.bar_chart(fy_summary, x="Financial Year", y="Gross Amount", color="#29B5E8")
+
+        with tab2:
+            # Group by Calendar Year
+            cy_summary = df.groupby('Calendar Year')['Gross Amount'].sum().reset_index()
+            cy_summary = cy_summary.sort_values('Calendar Year', ascending=False)
+            # Convert Year to String to avoid comma formatting (e.g. 2,024)
+            cy_summary['Calendar Year'] = cy_summary['Calendar Year'].astype(str)
+            st.dataframe(cy_summary, use_container_width=True, hide_index=True)
+            
+            # Chart
+            st.bar_chart(cy_summary, x="Calendar Year", y="Gross Amount", color="#00C853")
+
+        # --- 10. DETAILED LOG ---
+        st.subheader("📝 Transaction Ledger")
+        st.dataframe(df.sort_values(by="Ex-Date", ascending=False), use_container_width=True)
+        
+        csv = df.to_csv(index=False).encode('utf-8')
         st.download_button(
-            label="📥 Download for Tax Filing",
+            label="📥 Download Ledger (CSV)",
             data=csv,
             file_name='dividend_statement.csv',
             mime='text/csv',
@@ -241,5 +253,4 @@ else:
 st.markdown("---")
 st.markdown(
     "© 2026 | Built by **[Kevin Joseph](https://www.linkedin.com/in/kevin-joseph-in/)** | "
-    "Powered by [Yahoo Finance](https://pypi.org/project/yfinance/) & [Streamlit](https://streamlit.io)")
-st.caption("Disclaimer: This tool is for educational purposes and does not constitute financial advice.")
+    "Powered by [Yahoo Finance](https://pypi.org/project/yfinance/)")
