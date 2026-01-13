@@ -6,30 +6,41 @@ import time
 import os
 
 # --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="DiviTrack | Dividend Auditor", layout="wide")
+st.set_page_config(page_title="DiviTrack Pro", layout="wide", page_icon="💸")
 
 # --- 2. HELPER FUNCTIONS ---
-
 def get_financial_year(d):
-    """Returns the Financial Year (e.g., 'FY24-25') for a given date."""
+    """Returns the Financial Year (e.g., 'FY24-25')"""
     if d.month >= 4:
         return f"FY{d.year % 100}-{(d.year + 1) % 100}"
     else:
         return f"FY{(d.year - 1) % 100}-{d.year % 100}"
 
-def get_quarter(d):
-    """Returns the Calendar Quarter (Q1, Q2, Q3, Q4)."""
-    return f"Q{(d.month - 1) // 3 + 1}"
+def get_quarter(d, is_fy):
+    """Returns Quarter. 
+    If Calendar Year: Q1=Jan-Mar. 
+    If Financial Year: Q1=Apr-Jun.
+    """
+    m = d.month
+    if not is_fy:
+        # Calendar Year Quarters
+        return f"Q{(m - 1) // 3 + 1}"
+    else:
+        # Financial Year Quarters (India)
+        # Apr-Jun=Q1, Jul-Sep=Q2, Oct-Dec=Q3, Jan-Mar=Q4
+        if m >= 4:
+            return f"Q{(m - 4) // 3 + 1}"
+        else:
+            return "Q4"
 
 @st.cache_data
 def load_stock_map():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     csv_path = os.path.join(current_dir, "EQUITY_L.csv")
-
     try:
         df = pd.read_csv(csv_path, on_bad_lines='skip')
         df.columns = [c.strip() for c in df.columns]
-        
+        # Add REITs/InvITs manually
         reits_data = [
             {"NAME OF COMPANY": "Embassy Office Parks REIT", "SYMBOL": "EMBASSY"},
             {"NAME OF COMPANY": "Mindspace Business Parks REIT", "SYMBOL": "MINDSPACE"},
@@ -37,231 +48,190 @@ def load_stock_map():
             {"NAME OF COMPANY": "Nexus Select Trust", "SYMBOL": "NEXUS"},
             {"NAME OF COMPANY": "India Grid Trust", "SYMBOL": "INDIAGRID"},
             {"NAME OF COMPANY": "PowerGrid InvIT", "SYMBOL": "PGINVIT"},
-            {"NAME OF COMPANY": "IRB InvIT Fund", "SYMBOL": "IRBINVIT"},
-            {"NAME OF COMPANY": "Shrem InvIT", "SYMBOL": "SHREMINVIT"}
+            {"NAME OF COMPANY": "IRB InvIT Fund", "SYMBOL": "IRBINVIT"}
         ]
-        
-        df_reits = pd.DataFrame(reits_data)
-        df = pd.concat([df, df_reits], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame(reits_data)], ignore_index=True)
         df['Search_Label'] = df['NAME OF COMPANY'] + " (" + df['SYMBOL'] + ")"
         return df
-
-    except FileNotFoundError:
-        st.error(f"⚠ Could not find 'EQUITY_L.csv'. Code looked at: {csv_path}")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"⚠ Error loading stock list: {e}")
+    except:
         return pd.DataFrame()
 
 stock_map_df = load_stock_map()
 
-# --- 3. DISCLAIMER & PRIVACY ---
-st.warning("""
-    ⚠️ **IMPORTANT DISCLAIMER:**
-    * **Resident Individuals Only:** TDS logic assumes you are a Resident Individual (Section 194).
-    * **TDS Rule:** 10% TDS is auto-calculated ONLY if dividends from a single company exceed ₹5,000 in a Financial Year.
-    * **Not Financial Advice:** Verify all data with your Form 26AS.
-""")
-
-st.success("🔒 **Privacy Notice:** Your data is processed locally in RAM. It is never stored, saved, or shared.")
-
-# Initialize Session State
+# --- 3. SESSION STATE ---
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = []
 
-# --- 4. SIDEBAR: SMART INPUTS ---
-st.sidebar.header("💰 Add to Portfolio")
+# --- 4. SIDEBAR: PORTFOLIO MANAGER ---
+st.sidebar.header("📂 Portfolio Manager")
 
-with st.sidebar.form("add_stock_form"):
-    selected_ticker_symbol = None
-    selected_stock_name = None
-    
-    if not stock_map_df.empty:
-        user_selection = st.selectbox(
-            "Search Stock Name", 
-            stock_map_df['Search_Label'],
-            index=None,
-            placeholder="Type 'Zomato' or 'Embassy'..."
-        )
-        
-        if user_selection:
-            try:
-                clean_symbol = user_selection.split("(")[-1].replace(")", "").strip()
-                selected_ticker_symbol = f"{clean_symbol}.NS"
-                selected_stock_name = user_selection.split("(")[0].strip()
-            except:
-                st.error("Error parsing name.")
-            
-    else:
-        raw_input = st.text_input("Stock Symbol (Manual)", "ITC.NS")
-        if raw_input:
-            clean_symbol = raw_input.upper().replace(" ", "").strip()
-            selected_ticker_symbol = clean_symbol if clean_symbol.endswith(".NS") else f"{clean_symbol}.NS"
-            selected_stock_name = selected_ticker_symbol
-
-    qty_input = st.number_input("Quantity", min_value=1, max_value=100000, value=100)
-    buy_date_input = st.date_input("Purchase Date", date(2023, 1, 1))
-    
-    submitted = st.form_submit_button("Add Stock")
-    
-    if submitted:
-        if selected_ticker_symbol:
-            st.session_state.portfolio.append({
-                "Ticker": selected_ticker_symbol,
-                "Name": selected_stock_name,
-                "Qty": qty_input,
-                "BuyDate": buy_date_input
-            })
-            st.success(f"Added {selected_stock_name}")
-
-if st.sidebar.button("🗑️ Clear Portfolio"):
-    st.session_state.portfolio = []
-    st.rerun()
-
-# --- 5. MAIN LOGIC ---
-st.title("💸 DiviTrack: Dividend Tax & Eligibility Calculator")
-
-# Tax Configuration
-col_tax1, col_tax2 = st.columns(2)
-with col_tax1:
-    tax_slab = st.selectbox("Select Your Income Tax Slab", [0, 10, 20, 30], index=3, format_func=lambda x: f"{x}% Slab")
-with col_tax2:
-    st.info("ℹ️ TDS is now auto-calculated per company/FY.")
-
-# --- 6. PROCESSING ENGINE ---
-if len(st.session_state.portfolio) > 0:
-    st.divider()
-    
-    all_payouts = []
-    progress_text = "Scanning secure data streams..."
-    my_bar = st.progress(0, text=progress_text)
-    
-    total_stocks = len(st.session_state.portfolio)
-    
-    for i, item in enumerate(st.session_state.portfolio):
-        ticker = item['Ticker']
-        name = item.get('Name', ticker) 
-        qty = item['Qty']
-        buy_date = pd.to_datetime(item['BuyDate'])
-        
-        # Rate Limiting
-        time.sleep(0.1) 
-        my_bar.progress((i + 1) / total_stocks, text=f"Verifying {name}...")
-        
-        try:
-            stock = yf.Ticker(ticker)
-            div_history = stock.dividends
-            
-            if not div_history.empty:
-                div_history.index = div_history.index.tz_localize(None)
-                my_dividends = div_history[div_history.index > buy_date]
-                
-                for date_val, amount in my_dividends.items():
-                    payout = amount * qty
-                    # Determine Financial Year & Calendar Year
-                    fy = get_financial_year(date_val)
-                    cy = date_val.year
-                    quarter = get_quarter(date_val)
-                    
-                    all_payouts.append({
-                        "Stock": name,
-                        "Symbol": ticker,
-                        "Ex-Date": date_val.date(),
-                        "Financial Year": fy,
-                        "Calendar Year": cy,
-                        "Quarter": quarter,
-                        "Dividend/Share": amount,
-                        "Qty": qty,
-                        "Gross Amount": round(payout, 2)
-                    })
-            
-        except Exception as e:
-            st.error(f"Error fetching {name}: {e}")
-
-    my_bar.empty()
-
-    # --- 7. ANALYSIS & TAX LOGIC ---
-    if all_payouts:
-        df = pd.DataFrame(all_payouts)
-        
-        # A. INTELLIGENT TDS CALCULATION
-        tds_grouping = df.groupby(['Symbol', 'Financial Year'])['Gross Amount'].sum().reset_index()
-        tds_grouping['TDS Deducted'] = tds_grouping['Gross Amount'].apply(lambda x: x * 0.10 if x > 5000 else 0)
-        
-        total_tds_liability = tds_grouping['TDS Deducted'].sum()
-        total_gross_dividend = df['Gross Amount'].sum()
-        income_tax_amount = total_gross_dividend * (tax_slab / 100)
-        final_post_tax_profit = total_gross_dividend - income_tax_amount
-
-        # --- 8. GLOBAL DASHBOARD ---
-        st.subheader("📊 Lifetime Portfolio Metrics")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Dividend", f"₹{total_gross_dividend:,.2f}")
-        m2.metric("TDS Deducted", f"₹{total_tds_liability:,.2f}", help="Only if >₹5k per company/FY")
-        m3.metric("Tax Liability", f"₹{income_tax_amount:,.2f}", f"{tax_slab}% Slab")
-        m4.metric("Post-Tax Profit", f"₹{final_post_tax_profit:,.2f}", "Real Value")
-
-        st.markdown("---")
-
-        # --- 9. NEW FEATURE: HISTORICAL LOOKUP ---
-        st.subheader("🔎 Historical Drill-Down")
-        st.markdown("Select a specific year to see your earnings for that period.")
-
-        col_search1, col_search2 = st.columns(2)
-        
-        with col_search1:
-            search_mode = st.radio("Group By:", ["Calendar Year (Jan-Dec)", "Financial Year (Apr-Mar)"], horizontal=True)
-        
-        with col_search2:
-            if search_mode == "Calendar Year (Jan-Dec)":
-                unique_years = sorted(df['Calendar Year'].unique(), reverse=True)
-                selected_year = st.selectbox("Select Year", unique_years)
-                # Filter Data
-                filtered_df = df[df['Calendar Year'] == selected_year]
-            else:
-                unique_fys = sorted(df['Financial Year'].unique(), reverse=True)
-                selected_year = st.selectbox("Select Financial Year", unique_fys)
-                # Filter Data
-                filtered_df = df[df['Financial Year'] == selected_year]
-
-        if not filtered_df.empty:
-            # Metrics for the Selected Year
-            year_total = filtered_df['Gross Amount'].sum()
-            
-            # TDS for this specific year (Approximate visualization)
-            # We re-run the TDS check just for the filtered view to be safe
-            year_tds_df = filtered_df.groupby(['Symbol', 'Financial Year'])['Gross Amount'].sum().reset_index()
-            year_tds_val = year_tds_df['Gross Amount'].apply(lambda x: x * 0.10 if x > 5000 else 0).sum()
-            
-            ym1, ym2, ym3 = st.columns(3)
-            ym1.metric(f"Total Dividend ({selected_year})", f"₹{year_total:,.2f}")
-            ym2.metric(f"TDS ({selected_year})", f"₹{year_tds_val:,.2f}")
-            ym3.metric("Stock Count", len(filtered_df['Symbol'].unique()))
-            
-            # Quarterly Breakdown Chart
-            st.caption(f"Quarterly Performance in {selected_year}")
-            q_summary = filtered_df.groupby('Quarter')['Gross Amount'].sum().reset_index()
-            st.bar_chart(q_summary, x="Quarter", y="Gross Amount", color="#FF4B4B")
-            
-            with st.expander(f"View Transaction Details for {selected_year}"):
-                st.dataframe(filtered_df.sort_values(by="Ex-Date", ascending=False), use_container_width=True)
+# Add Stock Form
+with st.sidebar.expander("➕ Add Stock", expanded=True):
+    with st.form("add_stock"):
+        if not stock_map_df.empty:
+            user_sel = st.selectbox("Search Stock", stock_map_df['Search_Label'], index=None, placeholder="Type name...")
+            ticker_val = f"{user_sel.split('(')[-1].replace(')', '').strip()}.NS" if user_sel else None
+            name_val = user_sel.split("(")[0].strip() if user_sel else None
         else:
-            st.warning("No data found for this selection.")
+            ticker_val = st.text_input("Symbol (e.g., ITC.NS)")
+            name_val = ticker_val
 
-        # --- 10. DETAILED LOG ---
-        st.markdown("---")
-        st.subheader("📝 Full Transaction Ledger")
-        st.dataframe(df.sort_values(by="Ex-Date", ascending=False), use_container_width=True)
+        qty = st.number_input("Qty", 1, 100000, 100)
+        buy_date = st.date_input("Purchase Date", date(2023, 1, 1))
         
-    else:
-        st.info("No dividends found since purchase date.")
+        if st.form_submit_button("Add"):
+            if ticker_val:
+                st.session_state.portfolio.append({"Ticker": ticker_val, "Name": name_val, "Qty": qty, "BuyDate": buy_date})
+                st.rerun()
+
+# List Portfolio
+if st.session_state.portfolio:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("My Holdings")
+    for p in st.session_state.portfolio:
+        st.sidebar.text(f"{p['Name'][:15]}.. : {p['Qty']}")
+    
+    if st.sidebar.button("🗑️ Clear All"):
+        st.session_state.portfolio = []
+        st.rerun()
+
+# --- 5. MAIN DASHBOARD ---
+st.title("💸 DiviTrack Pro")
+
+# --- A. SETTINGS PANEL (TOP) ---
+st.markdown("### ⚙️ View Settings")
+col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+
+with col_s1:
+    tax_slab = st.selectbox("Tax Slab", [0, 10, 20, 30], index=3, format_func=lambda x: f"{x}% Slab")
+
+with col_s2:
+    # THE SWITCH: Calendar vs Financial Year
+    year_mode = st.radio("Year Format", ["Calendar (Jan-Dec)", "Financial (Apr-Mar)"], horizontal=True)
+    is_fy = True if "Financial" in year_mode else False
+
+# --- B. DATA PROCESSING ---
+if st.session_state.portfolio:
+    all_data = []
+    
+    # Process all stocks
+    for item in st.session_state.portfolio:
+        try:
+            stock = yf.Ticker(item['Ticker'])
+            divs = stock.dividends
+            divs.index = divs.index.tz_localize(None)
+            my_divs = divs[divs.index > pd.to_datetime(item['BuyDate'])]
+            
+            for d, amt in my_divs.items():
+                fy = get_financial_year(d)
+                cy = str(d.year)
+                q = get_quarter(d, is_fy)
+                
+                all_data.append({
+                    "Stock": item['Name'],
+                    "Symbol": item['Ticker'],
+                    "Date": d.date(),
+                    "Year_Ref": fy if is_fy else cy, # This controls how data is grouped (FY vs CY)
+                    "Quarter": q,
+                    "Amount": amt,
+                    "Qty": item['Qty'],
+                    "Total": round(amt * item['Qty'], 2)
+                })
+        except:
+            pass
+            
+    if all_data:
+        df = pd.DataFrame(all_data)
+        
+        # --- C. DYNAMIC FILTERS ---
+        available_years = sorted(df['Year_Ref'].unique(), reverse=True)
+        available_years.insert(0, "All Time")
+        
+        with col_s3:
+            selected_year = st.selectbox("Select Period", available_years)
+            
+        with col_s4:
+            # Quarter Filter (Only active if a specific year is chosen)
+            if selected_year != "All Time":
+                qs = sorted(df[df['Year_Ref'] == selected_year]['Quarter'].unique())
+                qs.insert(0, "All Quarters")
+                selected_quarter = st.selectbox("Select Quarter", qs)
+            else:
+                selected_quarter = "All Quarters"
+                st.selectbox("Select Quarter", ["All Quarters"], disabled=True)
+
+        # --- D. FILTER LOGIC ---
+        # 1. Filter by Year
+        if selected_year != "All Time":
+            view_df = df[df['Year_Ref'] == selected_year]
+        else:
+            view_df = df.copy()
+            
+        # 2. Filter by Quarter
+        if selected_quarter != "All Quarters":
+            view_df = view_df[view_df['Quarter'] == selected_quarter]
+
+        # --- E. METRICS CALCULATION (AUTO TDS) ---
+        if not view_df.empty:
+            total_gross = view_df['Total'].sum()
+            
+            # TDS Logic:
+            # 1. Group by Symbol + Year_Ref to check the 5000 limit limit GLOBALLY for that year
+            # We use the full 'df' (not view_df) to check eligibility, because splitting quarters shouldn't hide TDS liability
+            eligibility_df = df.groupby(['Symbol', 'Year_Ref'])['Total'].sum().reset_index()
+            eligibility_df['Is_TDS'] = eligibility_df['Total'] > 5000
+            
+            # 2. Merge eligibility back to the VIEW dataframe
+            view_df = pd.merge(view_df, eligibility_df[['Symbol', 'Year_Ref', 'Is_TDS']], on=['Symbol', 'Year_Ref'], how='left')
+            
+            # 3. Calculate TDS only where eligible
+            view_df['TDS_Ded'] = view_df.apply(lambda x: x['Total'] * 0.10 if x['Is_TDS'] else 0, axis=1)
+            
+            total_tds = view_df['TDS_Ded'].sum()
+            tax_liability = total_gross * (tax_slab/100)
+            net_profit = total_gross - tax_liability
+            
+            # --- F. DISPLAY METRICS ---
+            st.markdown("---")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("💰 Total Dividend", f"₹{total_gross:,.2f}", f"{selected_year}")
+            m2.metric("✂️ TDS Deducted", f"₹{total_tds:,.2f}", "Auto-calculated >5k")
+            m3.metric("🏛️ Tax Liability", f"₹{tax_liability:,.2f}", f"{tax_slab}% Slab")
+            m4.metric("🟢 Net In-Hand", f"₹{net_profit:,.2f}", "Post-Tax")
+            
+            # --- G. VISUALS ---
+            c1, c2 = st.columns([2,1])
+            with c1:
+                st.subheader("Monthly Trend")
+                view_df['Month'] = pd.to_datetime(view_df['Date']).dt.strftime('%b')
+                chart_data = view_df.groupby('Month')['Total'].sum().reindex(
+                    ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+                ).fillna(0)
+                st.bar_chart(chart_data, color="#00C853")
+                
+            with c2:
+                st.subheader("Top Payers")
+                st.dataframe(
+                    view_df.groupby('Stock')['Total'].sum().sort_values(ascending=False),
+                    use_container_width=True
+                )
+                
+            # --- H. LEDGER ---
+            with st.expander("📝 View Transaction Ledger", expanded=True):
+                st.dataframe(
+                    view_df[['Date', 'Stock', 'Amount', 'Qty', 'Total', 'Quarter', 'Year_Ref']]
+                    .sort_values(by="Date", ascending=False),
+                    use_container_width=True
+                )
+                
+        else:
+            st.warning(f"No dividends found for {selected_year} ({selected_quarter})")
 
 else:
-    st.info("👈 Use the smart search in the sidebar to add stocks.")
+    st.info("👈 Add stocks in the sidebar to begin.")
 
 # --- FOOTER ---
 st.markdown("---")
 st.markdown(
     "© 2026 | Built by **[Kevin Joseph](https://www.linkedin.com/in/kevin-joseph-in/)** | "
-    "Powered by [Yahoo Finance](https://pypi.org/project/yfinance/)"
-)
+    "Powered by [Yahoo Finance](https://pypi.org/project/yfinance/)")
