@@ -6,7 +6,7 @@ import time
 import os
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="DiviTrack Pro", layout="wide", page_icon="📈")
+st.set_page_config(page_title="DiviTrack", layout="wide", page_icon="📈")
 
 # --- 2. LOGIC FUNCTIONS ---
 def get_fy(d):
@@ -21,7 +21,7 @@ def get_fiscal_quarter(d):
     if d.month >= 4: return f"Q{(d.month - 4) // 3 + 1}"
     return "Q4"
 
-# --- 3. DATA LOADING (RESTORED DROPDOWN) ---
+# --- 3. DATA LOADING (DROPDOWN SUPPORT) ---
 @st.cache_data
 def load_stock_db():
     try:
@@ -42,7 +42,7 @@ def load_stock_db():
         ]
         df = pd.concat([df, pd.DataFrame(extras)], ignore_index=True)
         
-        # Create Search Label: "ITC Ltd (ITC)"
+        # Create Search Label
         df['Label'] = df['NAME OF COMPANY'] + " (" + df['SYMBOL'] + ")"
         return df
     except:
@@ -91,7 +91,7 @@ if 'portfolio' not in st.session_state:
 # --- 6. SIDEBAR ---
 st.sidebar.header("Portfolio Manager")
 
-# STOCK ADDER (UPDATED)
+# STOCK ADDER
 with st.sidebar.expander("➕ Add Asset", expanded=True):
     stock_db = load_stock_db()
     
@@ -99,11 +99,9 @@ with st.sidebar.expander("➕ Add Asset", expanded=True):
         # DROPDOWN LOGIC
         if not stock_db.empty:
             sel = st.selectbox("Search Stock / REIT / InvIT", stock_db['Label'], index=None, placeholder="Type to search...")
-            # Extract Symbol: "ITC (ITC)" -> "ITC.NS"
             ticker_val = f"{sel.split('(')[-1].replace(')', '').strip()}.NS" if sel else None
             name_val = sel.split("(")[0].strip() if sel else None
         else:
-            # Fallback if CSV missing
             ticker_val = st.text_input("Symbol (e.g. ITC.NS)")
             name_val = ticker_val
 
@@ -124,7 +122,7 @@ if st.sidebar.button("🗑️ Clear Portfolio"):
     st.rerun()
 
 # --- 7. MAIN DASHBOARD ---
-st.title("DiviTrack Pro")
+st.title("DiviTrack")
 
 # DISCLAIMERS
 with st.expander("⚠️ Important Disclaimers & Privacy", expanded=False):
