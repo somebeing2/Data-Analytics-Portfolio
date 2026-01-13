@@ -1,106 +1,90 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-from datetime import date, datetime
+from datetime import date
 import time
 import os
 
-# --- 1. CONFIGURATION & STATE ---
+# --- 1. CONFIGURATION ---
 st.set_page_config(page_title="DiviTrack Pro", layout="wide", page_icon="💸")
 
-if 'portfolio' not in st.session_state:
-    st.session_state.portfolio = []
+# --- 2. UTILITY FUNCTIONS (THE BRAIN) ---
 
-# --- 2. ROBUST UTILITY FUNCTIONS ---
-
-def get_fy_tag(d: date) -> str:
-    """Returns Financial Year tag (e.g., 'FY24-25')"""
+def get_fy(d: date) -> str:
+    """Return Strict Financial Year (e.g., FY23-24)"""
     if d.month >= 4:
         return f"FY{d.year % 100}-{(d.year + 1) % 100}"
     else:
         return f"FY{(d.year - 1) % 100}-{d.year % 100}"
 
-def get_quarter_tag(d: date, is_fy: bool) -> str:
-    """Returns Quarter tag based on view mode"""
+def get_cy(d: date) -> str:
+    """Return Calendar Year (e.g., 2024)"""
+    return str(d.year)
+
+def get_quarter(d: date, is_fy_view: bool) -> str:
+    """Return Quarter Tag based on View Mode"""
     m = d.month
-    if is_fy:
-        # Fiscal: Apr-Jun=Q1, Jul-Sep=Q2, Oct-Dec=Q3, Jan-Mar=Q4
+    if is_fy_view:
+        # Fiscal Quarters (Apr-Jun = Q1)
         if m >= 4: return f"Q{(m - 4) // 3 + 1}"
         else: return "Q4"
     else:
-        # Calendar: Jan-Mar=Q1 ...
+        # Calendar Quarters (Jan-Mar = Q1)
         return f"Q{(m - 1) // 3 + 1}"
 
-def calculate_tds_eligibility(full_df):
-    """
-    CRITICAL LOGIC: 
-    1. Scan ALL dividend history.
-    2. Group by Stock + Financial Year.
-    3. If Sum > 5000, mark THAT pair as Taxable.
-    """
-    if full_df.empty:
-        return {}
-    
-    # Group by Symbol and STRICT FY (Tax Law)
-    fy_summary = full_df.groupby(['Symbol', 'Strict_FY'])['Total_Gross'].sum()
-    
-    # Create a set of "Taxable Events" (e.g., "ITC.NS_FY24-25")
-    taxable_keys = set()
-    for (symbol, fy), total_amt in fy_summary.items():
-        if total_amt > 5000:
-            taxable_keys.add(f"{symbol}_{fy}")
-            
-    return taxable_keys
-
+# --- 3. DATA LOADER ---
 @st.cache_data
-def load_stock_master():
+def load_stock_list():
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         csv_path = os.path.join(current_dir, "EQUITY_L.csv")
         df = pd.read_csv(csv_path, on_bad_lines='skip')
         df.columns = [c.strip() for c in df.columns]
         
-        # Add REITs/InvITs manually
-        extra_stocks = [
-            {"NAME OF COMPANY": "Embassy Office Parks REIT", "SYMBOL": "EMBASSY"},
-            {"NAME OF COMPANY": "Mindspace Business Parks REIT", "SYMBOL": "MINDSPACE"},
-            {"NAME OF COMPANY": "Brookfield India Real Estate Trust", "SYMBOL": "BIRET"},
+        # Add REITs
+        reits = [
+            {"NAME OF COMPANY": "Embassy REIT", "SYMBOL": "EMBASSY"},
+            {"NAME OF COMPANY": "Mindspace REIT", "SYMBOL": "MINDSPACE"},
+            {"NAME OF COMPANY": "Brookfield REIT", "SYMBOL": "BIRET"},
             {"NAME OF COMPANY": "Nexus Select Trust", "SYMBOL": "NEXUS"},
             {"NAME OF COMPANY": "India Grid Trust", "SYMBOL": "INDIAGRID"},
             {"NAME OF COMPANY": "PowerGrid InvIT", "SYMBOL": "PGINVIT"},
-            {"NAME OF COMPANY": "IRB InvIT Fund", "SYMBOL": "IRBINVIT"}
+            {"NAME OF COMPANY": "IRB InvIT", "SYMBOL": "IRBINVIT"}
         ]
-        df = pd.concat([df, pd.DataFrame(extra_stocks)], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame(reits)], ignore_index=True)
         df['Label'] = df['NAME OF COMPANY'] + " (" + df['SYMBOL'] + ")"
         return df
     except:
         return pd.DataFrame()
 
-# --- 3. SIDEBAR ---
-st.sidebar.title("💸 DiviTrack Pro")
-st.sidebar.markdown("---")
+# --- 4. SESSION STATE ---
+if 'portfolio' not in st.session_state:
+    st.session_state.portfolio = []
 
-# RESET BUTTON (Fixes Cache Issues)
-if st.sidebar.button("↻ Reset / Clear Cache"):
+# --- 5. SIDEBAR ---
+st.sidebar.title("💸 DiviTrack Pro")
+
+# RESET BUTTON (CRITICAL FOR FIXING BUGS)
+if st.sidebar.button("↻ Reset App State"):
     st.cache_data.clear()
     st.rerun()
 
-# INPUT FORM
+st.sidebar.markdown("---")
 with st.sidebar.expander("➕ Add Stock", expanded=True):
-    stock_map = load_stock_master()
+    stock_df = load_stock_list()
     with st.form("add_stock"):
-        if not stock_map.empty:
-            sel = st.selectbox("Search", stock_map['Label'], index=None, placeholder="Name or Symbol...")
+        if not stock_df.empty:
+            sel = st.selectbox("Search", stock_df['Label'], index=None)
             ticker = f"{sel.split('(')[-1].replace(')', '').strip()}.NS" if sel else None
             name = sel.split("(")[0].strip() if sel else None
         else:
             ticker = st.text_input("Symbol (e.g. ITC.NS)")
             name = ticker
             
-        qty = st.number_input("Quantity", 1, 100000, 100)
-        buy_date = st.date_input("Purchase Date", date(2023, 1, 1))
+        qty = st.number_input("Qty", 1, 100000, 100)
+        buy_date = st.date_input("Buy Date", date(2023, 1, 1))
         
-        if st.form_submit_button("Add to Portfolio"):
+        if st.form_submit_button("Add"):
             if ticker:
                 st.session_state.portfolio.append({
                     "Ticker": ticker, "Name": name, "Qty": qty, "BuyDate": buy_date
@@ -108,89 +92,136 @@ with st.sidebar.expander("➕ Add Stock", expanded=True):
                 st.rerun()
 
 if st.session_state.portfolio:
-    st.sidebar.markdown("### Holdings")
+    st.sidebar.markdown("### Portfolio")
     for p in st.session_state.portfolio:
-        st.sidebar.text(f"{p['Name'][:15]}... ({p['Qty']})")
-    
-    if st.sidebar.button("🗑️ Delete All"):
+        st.sidebar.text(f"{p['Name'][:15]}.. ({p['Qty']})")
+    if st.sidebar.button("🗑️ Clear All"):
         st.session_state.portfolio = []
         st.rerun()
 
-# --- 4. MAIN LOGIC ENGINE ---
+# --- 6. MAIN ENGINE (RE-ENGINEERED) ---
 st.title("Dividend Tax Auditor")
 
-# A. VIEW SETTINGS (The "Lens")
-col_view1, col_view2 = st.columns(2)
-with col_view1:
-    tax_slab = st.selectbox("Your Tax Slab", [0, 10, 20, 30], index=3, format_func=lambda x: f"{x}%")
-with col_view2:
-    view_mode = st.radio("Time View", ["Calendar Year", "Financial Year"], horizontal=True)
-    is_fy_view = (view_mode == "Financial Year")
+# A. VIEW SETTINGS
+col1, col2 = st.columns(2)
+with col1:
+    tax_slab = st.selectbox("Tax Slab", [0, 10, 20, 30], index=3, format_func=lambda x: f"{x}%")
+with col2:
+    # THE VIEW TOGGLE
+    view_mode = st.radio("Group By:", ["Calendar Year (Jan-Dec)", "Financial Year (Apr-Mar)"], horizontal=True)
+    is_fy_view = (view_mode == "Financial Year (Apr-Mar)")
 
-# B. DATA PROCESSING (The "Brain")
 if st.session_state.portfolio:
-    raw_records = []
+    # B. FETCH DATA
+    raw_data = []
     
-    # Step 1: Fetch Raw Data
     for item in st.session_state.portfolio:
         try:
             stock = yf.Ticker(item['Ticker'])
             hist = stock.dividends
             hist.index = hist.index.tz_localize(None)
-            
-            # Filter: Only dividends AFTER purchase
             valid_divs = hist[hist.index > pd.to_datetime(item['BuyDate'])]
             
             for d, amt in valid_divs.items():
                 d_date = d.date()
-                gross = round(amt * item['Qty'], 2)
+                # Calculate BOTH tags for every row
+                row_fy = get_fy(d_date)
+                row_cy = get_cy(d_date)
                 
-                # Calculate Tags
-                fy_tag = get_fy_tag(d_date)             # ALWAYS calculate strict FY for Tax
-                cy_tag = str(d_date.year)               # Calendar Year
-                
-                # Decide what "Year" to show based on user toggle
-                display_year = fy_tag if is_fy_view else cy_tag
-                display_q = get_quarter_tag(d_date, is_fy_view)
-                
-                raw_records.append({
+                raw_data.append({
                     "Date": d_date,
                     "Stock": item['Name'],
                     "Symbol": item['Ticker'],
                     "Qty": item['Qty'],
                     "Amount": amt,
-                    "Total_Gross": gross,
-                    "Strict_FY": fy_tag,       # Critical for TDS logic
-                    "Display_Year": display_year, # Critical for Visualization
-                    "Display_Q": display_q
+                    "Total": round(amt * item['Qty'], 2),
+                    "FY": row_fy,  # Use for TDS Calc
+                    "CY": row_cy   # Use for Display
                 })
         except:
             pass
 
-    if raw_records:
-        df = pd.DataFrame(raw_records)
+    if raw_data:
+        df = pd.DataFrame(raw_data)
+
+        # C. TDS PRE-CALCULATION (Global Logic)
+        # 1. Group by Stock + FY to find totals
+        fy_groups = df.groupby(['Symbol', 'FY'])['Total'].sum().reset_index()
         
-        # Step 2: CALCULATE TDS (The "Compliance Layer")
-        # We calculate this on the FULL dataframe before filtering
-        taxable_map = calculate_tds_eligibility(df)
+        # 2. Identify Taxable Pairs (Total > 5000)
+        taxable_pairs = set()
+        for _, row in fy_groups.iterrows():
+            if row['Total'] > 5000:
+                taxable_pairs.add((row['Symbol'], row['FY']))
         
-        # Apply TDS Logic Row-by-Row
-        def apply_tds(row):
-            key = f"{row['Symbol']}_{row['Strict_FY']}"
-            if key in taxable_map:
-                return row['Total_Gross'] * 0.10
+        # 3. Stamp TDS on every row individually based on ITS fiscal year
+        def calculate_row_tds(row):
+            if (row['Symbol'], row['FY']) in taxable_pairs:
+                return row['Total'] * 0.10
             return 0.0
             
-        df['TDS_Amount'] = df.apply(apply_tds, axis=1)
+        df['TDS_Amount'] = df.apply(calculate_row_tds, axis=1)
+
+        # D. VIEW PREPARATION
+        # Create a "Display_Year" column based on the user's toggle
+        df['Display_Year'] = df['FY'] if is_fy_view else df['CY']
+        df['Display_Quarter'] = df['Date'].apply(lambda x: get_quarter(x, is_fy_view))
+
+        # E. DYNAMIC FILTERS
+        # Get list of years available in the VIEW mode
+        available_years = sorted(df['Display_Year'].unique(), reverse=True)
         
-        # Step 3: FILTERING (The "Presentation Layer")
-        
-        # Defaults: Find the "Current" period to show
-        all_years = sorted(df['Display_Year'].unique(), reverse=True)
-        
-        # Top Filter Bar
-        st.markdown("### 🔎 Period Filter")
+        st.markdown("### 🔎 Filters")
         c_f1, c_f2 = st.columns(2)
         
         with c_f1:
-            # Default to the most recent
+            # Force Default to Index 0 (Most Recent Year)
+            # This solves "Showing all previous years" bug
+            sel_year = st.selectbox("Select Year", available_years, index=0)
+            
+        with c_f2:
+            # Filter quarters available in that specific year
+            qs_in_year = sorted(df[df['Display_Year'] == sel_year]['Display_Quarter'].unique())
+            qs_in_year.insert(0, "All Quarters")
+            sel_q = st.selectbox("Select Quarter", qs_in_year)
+
+        # F. APPLY FILTERS
+        view_df = df[df['Display_Year'] == sel_year].copy()
+        
+        if sel_q != "All Quarters":
+            view_df = view_df[view_df['Display_Quarter'] == sel_q]
+
+        # G. METRICS (On Filtered Data)
+        if not view_df.empty:
+            total_inc = view_df['Total'].sum()
+            total_tds = view_df['TDS_Amount'].sum()
+            tax_val = total_inc * (tax_slab / 100)
+            net = total_inc - tax_val
+
+            st.markdown("---")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("💰 Total Dividend", f"₹{total_inc:,.2f}", f"in {sel_year}")
+            m2.metric("✂️ TDS Deducted", f"₹{total_tds:,.2f}", "Auto (>5k Rule)")
+            m3.metric("🏛️ Tax Liability", f"₹{tax_val:,.2f}", f"{tax_slab}% Slab")
+            m4.metric("🟢 Net Profit", f"₹{net:,.2f}", "Real In-Hand")
+
+            # H. CHARTS & LEDGER
+            st.subheader("Monthly Breakdown")
+            view_df['Month'] = pd.to_datetime(view_df['Date']).dt.strftime('%b')
+            months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+            chart_data = view_df.groupby('Month')['Total'].sum().reindex(months).fillna(0)
+            st.bar_chart(chart_data, color="#00C853")
+
+            with st.expander("📝 Transaction Ledger", expanded=True):
+                show_cols = ['Date', 'Stock', 'Total', 'TDS_Amount', 'Display_Quarter', 'FY']
+                st.dataframe(view_df[show_cols].sort_values("Date", ascending=False), use_container_width=True)
+
+        else:
+            st.warning(f"No data found for {sel_year} ({sel_q})")
+            
+else:
+    st.info("👈 Add a stock to begin.")
+
+# --- FOOTER ---
+st.markdown("---")
+st.markdown("© 2026 | Built by **[Kevin Joseph](https://www.linkedin.com/in/kevin-joseph-in/)**")
