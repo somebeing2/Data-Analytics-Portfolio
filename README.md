@@ -47,4 +47,4 @@ Unlike standard portfolio trackers, it features a **Compliance Engine** that aut
 
 ---
 *Disclaimer: This tool is for estimation purposes only. Please verify all data with your Form 26AS.*
-Linkedin: https://www.linkedin.com/in/kevin-joseph-in/
+ Linkedin: https://www.linkedin.com/in/kevin-joseph-in/
