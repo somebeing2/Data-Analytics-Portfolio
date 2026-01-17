@@ -30,20 +30,6 @@ Unlike standard portfolio trackers, it features a **Compliance Engine** that aut
 * **Data Processing:** Pandas & NumPy
 * **Caching:** Streamlit Native Caching (TTL)
 
-###  How to Run Locally
-
-1.  **Clone the repository:**
-    ```bash
-    git clone [https://github.com/yourusername/Data-Analytics-Portfolio.git](https://github.com/yourusername/Data-Analytics-Portfolio.git)
-    ```
-2.  **Install dependencies:**
-    ```bash
-    pip install streamlit yfinance pandas
-    ```
-3.  **Run the app:**
-    ```bash
-    streamlit run app.py
-    ```
 
 ---
 *Disclaimer: This tool is for estimation purposes only. Please verify all data with your Form 26AS.*
