@@ -1,7 +1,9 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import os
 from datetime import date
+from io import BytesIO
 
 # 1. SETUP: Define the file where we store data
 DATA_FILE = "expenses.csv"
@@ -11,61 +13,82 @@ def load_data():
     if os.path.exists(DATA_FILE):
         return pd.read_csv(DATA_FILE)
     else:
-        # If file doesn't exist, return an empty dataframe with columns
         return pd.DataFrame(columns=["Date", "Category", "Amount", "Description"])
 
 # 3. FUNCTION: Save data back to the CSV file
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
-# 4. APP TITLE
+# 4. FUNCTION: Convert DataFrame to Excel for download
+def to_excel(df):
+    output = BytesIO()
+    # Use 'openpyxl' engine for writing Excel files
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Expenses')
+    return output.getvalue()
+
+# 5. APP TITLE
 st.title("💰 My Monthly Expense Tracker")
 
-# 5. SIDEBAR: Input form for new expenses
+# 6. SIDEBAR: Input form for new expenses
 st.sidebar.header("Add New Expense")
 with st.sidebar.form("expense_form"):
     exp_date = st.date_input("Date", value=date.today())
     exp_category = st.selectbox("Category", ["Food", "Transport", "Utilities", "Entertainment", "Other"])
-    exp_amount = st.number_input("Amount", min_value=0.0, format="%.2f")
+    # Changed format to handle generic float, display logic handles the symbol
+    exp_amount = st.number_input("Amount (₹)", min_value=0.0, format="%.2f")
     exp_desc = st.text_input("Description")
     
-    # The submit button
     submitted = st.form_submit_button("Add Expense")
 
-# 6. LOGIC: What happens when you click "Add Expense"
+# 7. LOGIC: What happens when you click "Add Expense"
 if submitted:
-    # Load current data
     df = load_data()
-    
-    # Create a new row of data
     new_data = pd.DataFrame({
         "Date": [exp_date],
         "Category": [exp_category],
         "Amount": [exp_amount],
         "Description": [exp_desc]
     })
-    
-    # Combine old data with new data using pd.concat
     df = pd.concat([df, new_data], ignore_index=True)
-    
-    # Save it
     save_data(df)
     st.sidebar.success("Expense Added!")
 
-# 7. MAIN AREA: Show the data
-st.header("Recent Expenses")
+# 8. MAIN AREA: Show the data and charts
+st.header("Your Expenses")
 df = load_data()
 
-# Show the table if there is data
 if not df.empty:
-    # Sort by date (newest first)
+    # Ensure the Date column is actually treated as dates for sorting
+    df["Date"] = pd.to_datetime(df["Date"]).dt.date
     df = df.sort_values(by="Date", ascending=False)
     
+    # --- FEATURE 1: Rupee Sign & Metrics ---
+    total_spent = df["Amount"].sum()
+    # We use the currency symbol directly in the string format
+    st.metric(label="Total Spent All Time", value=f"₹{total_spent:,.2f}")
+
+    # --- FEATURE 2: Pie Chart ---
+    st.subheader("Expenses by Category")
+    # We group data by Category to sum the amounts
+    category_totals = df.groupby("Category")["Amount"].sum().reset_index()
+    
+    # Create the chart using Plotly
+    fig = px.pie(category_totals, values="Amount", names="Category", 
+                 title="Where is the money going?", hole=0.3)
+    st.plotly_chart(fig)
+
     # Display the dataframe
     st.dataframe(df, use_container_width=True)
 
-    # 8. METRICS: Show total spent
-    total_spent = df["Amount"].sum()
-    st.metric(label="Total Spent All Time", value=f"${total_spent:,.2f}")
+    # --- FEATURE 3: Excel Download ---
+    excel_data = to_excel(df)
+    st.download_button(
+        label="📥 Download Data as Excel",
+        data=excel_data,
+        file_name='my_expenses.xlsx',
+        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
 else:
     st.info("No expenses tracked yet. Add one from the sidebar!")
