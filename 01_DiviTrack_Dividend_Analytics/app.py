@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import plotly.express as px
 from datetime import date
 import time
 import os
@@ -27,6 +28,10 @@ def load_stock_db():
     try:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         csv_path = os.path.join(current_dir, "EQUITY_L.csv")
+        # Check if file exists to avoid crashing
+        if not os.path.exists(csv_path):
+            return pd.DataFrame()
+            
         df = pd.read_csv(csv_path, on_bad_lines='skip')
         df.columns = [c.strip() for c in df.columns]
         
@@ -91,7 +96,22 @@ if 'portfolio' not in st.session_state:
 # --- 6. SIDEBAR ---
 st.sidebar.header("Portfolio Manager")
 
-# STOCK ADDER
+# A. YIELD CALCULATOR (NEW)
+st.sidebar.markdown("---")
+with st.sidebar.expander("🧮 Yield Calculator", expanded=False):
+    st.caption("Quick check for any stock")
+    calc_price = st.number_input("Share Price (₹)", value=1000.0, step=10.0)
+    calc_div = st.number_input("Annual Dividend (₹)", value=50.0, step=1.0)
+    
+    if calc_price > 0:
+        yield_val = (calc_div / calc_price) * 100
+        st.metric("Dividend Yield", f"{yield_val:.2f}%")
+        st.caption("Note: Yield = (Div / Price) * 100")
+    else:
+        st.warning("Price must be > 0")
+st.sidebar.markdown("---")
+
+# B. ADD ASSET
 with st.sidebar.expander("➕ Add Asset", expanded=True):
     stock_db = load_stock_db()
     
@@ -124,7 +144,7 @@ if st.sidebar.button("🗑️ Clear Portfolio"):
 # --- 7. MAIN DASHBOARD ---
 st.title("DiviTrack")
 
-# DISCLAIMERS (UPDATED)
+# DISCLAIMERS
 with st.expander("⚠️ Important Disclaimers & Privacy", expanded=False):
     st.markdown("""
     * **Residency:** Taxation rules applied here are strictly for **Resident Individuals in India**.
@@ -191,6 +211,43 @@ if st.session_state.portfolio:
             m3.metric("Tax Liability", f"₹{tax:,.2f}")
             m4.metric("Net In-Hand", f"₹{net:,.2f}")
 
+            # --- VISUALIZATION SECTION (NEW) ---
+            st.divider()
+            st.subheader("📊 Visual Analytics")
+            
+            chart_col1, chart_col2 = st.columns(2)
+            
+            with chart_col1:
+                st.markdown("**💰 Income Source (Top Payers)**")
+                # Group by Stock to find top payers
+                stock_group = view_df.groupby("Stock")['Gross'].sum().reset_index()
+                fig_bar = px.bar(
+                    stock_group, 
+                    x='Stock', 
+                    y='Gross',
+                    color='Gross',
+                    color_continuous_scale='Greens',
+                    labels={'Gross': 'Income (₹)'}
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+            with chart_col2:
+                st.markdown("**📈 Income Trend (Quarterly)**")
+                # Group by Quarter to show trend
+                trend_group = view_df.groupby("Q_Display")['Gross'].sum().reset_index()
+                fig_line = px.line(
+                    trend_group, 
+                    x='Q_Display', 
+                    y='Gross',
+                    markers=True,
+                    labels={'Gross': 'Income (₹)', 'Q_Display': 'Quarter'}
+                )
+                fig_line.update_traces(line_color='#4CAF50', line_width=3)
+                st.plotly_chart(fig_line, use_container_width=True)
+
+            # --- DATA TABLE ---
+            st.divider()
+            st.subheader("📝 Transaction Details")
             st.dataframe(view_df[['Date','Stock','Gross','TDS','Year_Display']].sort_values('Date', ascending=False), use_container_width=True)
         else:
             st.warning("No data for selection.")
